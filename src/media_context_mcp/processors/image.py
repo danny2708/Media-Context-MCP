@@ -375,7 +375,7 @@ def render_vision_markdown(
 
 
 def vision_unusable_error_typed(context: ProcessingContext):
-    from ..routing.heuristics import Capabilities, vision_unusable_error
+    from ..routing.heuristics import Capabilities
 
     caps = Capabilities(
         vision_configured=context.settings.vision_configured,

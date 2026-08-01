@@ -58,8 +58,9 @@ asyncio_mode = "auto"
 filterwarnings = ["ignore::DeprecationWarning"]
 markers = [
     "requires_tesseract: test needs the tesseract binary on PATH",
-    "requires_vision: test needs a configured live vision provider",
+    "requires_vision: live vision smoke test; needs credentials and explicit -m selection",
 ]
+addopts = "-m 'not requires_vision'"
 
 [tool.ruff]
 line-length = 100
@@ -68,4 +69,6 @@ src = ["src", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
-ignore = ["B008"]
+# UP042: (str, Enum) kept deliberately -- these enums are a serialized public
+# contract and the base-class choice is orthogonal to the lint's intent.
+ignore = ["B008", "UP042"]

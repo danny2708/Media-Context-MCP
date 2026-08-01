@@ -14,8 +14,8 @@ from ..models import (
     AnalyzeMediaRequest,
     EvidenceItem,
     EvidenceType,
-    MediaInfo,
     MediaCategory,
+    MediaInfo,
     ProcessorResult,
 )
 from .base import ProcessingContext

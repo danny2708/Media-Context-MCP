@@ -44,7 +44,7 @@ from ..prompts import (
     parse_vision_reply,
     select_profile,
 )
-from ..providers.base import OcrResult, VisionImage
+from ..providers.base import OcrResult
 from ..routing.heuristics import (
     INTENT_VISUAL_SEMANTICS,
     STRATEGY_OCR,
@@ -55,8 +55,8 @@ from ..routing.heuristics import (
 )
 from ..security.limits import parse_page_selection
 from .base import ProcessingContext
-from .imaging import PreprocessConfig, prepare_for_ocr, prepare_for_vision
 from .image import render_vision_markdown
+from .imaging import PreprocessConfig, prepare_for_ocr, prepare_for_vision
 from .ocr import fenced, ocr_evidence
 
 # At most this many pages are rasterised/processed concurrently.

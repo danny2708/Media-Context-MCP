@@ -16,7 +16,7 @@ from __future__ import annotations
 import hashlib
 import mimetypes
 import zipfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from .errors import UnsupportedMediaTypeError
@@ -153,9 +153,8 @@ def _sniff_zip_container(path: Path) -> tuple[str | None, str | None]:
     except (zipfile.BadZipFile, OSError):
         return "zip", "application/zip"
 
-    if any(name.startswith("EPUB/") or name == "mimetype" for name in names):
-        if any(name == "mimetype" for name in names):
-            return "epub", "application/epub+zip"
+    if any(name == "mimetype" for name in names):
+        return "epub", "application/epub+zip"
     for prefix, mime, _category in _OOXML_MEMBER_HINTS:
         if any(name.startswith(prefix) for name in names):
             return "ooxml", mime
@@ -195,13 +194,13 @@ def detect_media(path: Path) -> MediaInfo:
         # Trust the bytes when they contradict the extension: a '.txt' that is really
         # a PDF should be processed as a PDF, and a '.png' that is really a zip must
         # not reach the image decoder.
-        if category is MediaCategory.UNKNOWN or (
+        contradicts = category is MediaCategory.UNKNOWN or (
             sniffed_category is not MediaCategory.UNKNOWN and sniffed_category is not category
-        ):
-            # OLE2 covers .xls, .msg and .doc alike; the extension disambiguates it,
-            # so keep the extension's answer when we already have one.
-            if not (sniffed_kind == "ole2" and category is MediaCategory.OFFICE):
-                mime, category = sniffed_mime, sniffed_category
+        )
+        # OLE2 covers .xls, .msg and .doc alike; the extension disambiguates it,
+        # so keep the extension's answer when we already have one.
+        if contradicts and not (sniffed_kind == "ole2" and category is MediaCategory.OFFICE):
+            mime, category = sniffed_mime, sniffed_category
 
     if not mime:
         guessed, _ = mimetypes.guess_type(path.name)
@@ -219,7 +218,7 @@ def detect_media(path: Path) -> MediaInfo:
         mime_type=mime,
         category=category,
         size_bytes=stat_result.st_size,
-        modified_at=datetime.fromtimestamp(stat_result.st_mtime, tz=timezone.utc),
+        modified_at=datetime.fromtimestamp(stat_result.st_mtime, tz=UTC),
         sha256=sha256_file(path),
         sniffed_type=sniffed_kind,
     )

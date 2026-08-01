@@ -408,6 +408,4 @@ def ocr_quality_sufficient(char_count: int, mean_confidence: float | None) -> bo
     """
     if char_count < 40:
         return False
-    if mean_confidence is not None and mean_confidence < 0.65:
-        return False
-    return True
+    return mean_confidence is None or mean_confidence >= 0.65

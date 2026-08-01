@@ -16,7 +16,6 @@ import json
 import platform
 import sys
 import time
-from pathlib import Path
 
 from . import __version__
 from .config import Settings, get_settings
@@ -43,12 +42,8 @@ def cmd_doctor(settings: Settings, *, vision: bool, network: bool) -> int:
           f"({platform.system()} {platform.release()})")
     print()
 
-    # Python version
-    if sys.version_info >= (3, 11):
-        _print(_OK, f"Python {platform.python_version()}")
-    else:
-        _print(_BAD, f"Python {platform.python_version()} -- 3.11+ required")
-        failures += 1
+    # Python version (requires-python already gates installs; this is informational)
+    _print(_OK, f"Python {platform.python_version()}")
 
     # MCP package
     try:
@@ -199,9 +194,10 @@ def _doctor_vision(settings: Settings, *, network: bool) -> int:
 
     # Client initialisation + image encoding, no network.
     try:
-        from .providers.openai_compatible import build_vision_provider, data_url
-        from .processors.imaging import PreprocessConfig, prepare_for_vision
         from PIL import Image
+
+        from .processors.imaging import PreprocessConfig, prepare_for_vision
+        from .providers.openai_compatible import build_vision_provider, data_url
 
         provider = build_vision_provider(settings)
         assert provider is not None

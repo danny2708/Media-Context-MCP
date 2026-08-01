@@ -38,7 +38,8 @@ from __future__ import annotations
 import asyncio
 import re
 import threading
-from importlib.metadata import PackageNotFoundError, version as package_version
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as package_version
 
 from markitdown import (
     FileConversionException,
@@ -409,7 +410,8 @@ class MarkItDownProcessor:
         label = info.extension.lstrip(".").upper() or info.mime_type
         parts = [f"{label} document `{info.name}` converted to Markdown by MarkItDown"]
         if slides:
-            parts.append(f"{len(slides)} slide(s)" + (f", returning {selected_note}" if selected_note else ""))
+            suffix = f", returning {selected_note}" if selected_note else ""
+            parts.append(f"{len(slides)} slide(s){suffix}")
         if sheets:
             parts.append(f"sheets: {', '.join(name for name, _ in sheets)}")
         headings = _outline(markdown, limit=4)
