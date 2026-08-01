@@ -57,7 +57,7 @@ class Settings(BaseSettings):
     max_file_mb: int = 50
     max_pages: int = 30
     max_image_pixels: int = 40_000_000
-    max_output_chars: int = 30_000
+    max_output_chars: int = 100_000
     process_timeout_seconds: int = 120
 
     # --- cache --------------------------------------------------------------
