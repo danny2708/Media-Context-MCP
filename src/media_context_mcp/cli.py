@@ -47,9 +47,11 @@ def cmd_doctor(settings: Settings, *, vision: bool, network: bool) -> int:
 
     # MCP package
     try:
-        import mcp
+        from importlib.metadata import version as _pkg_version
 
-        _print(_OK, f"mcp package {getattr(mcp, '__version__', '(version unknown)')}")
+        import mcp  # noqa: F401
+
+        _print(_OK, f"mcp package {_pkg_version('mcp')}")
     except ImportError:
         _print(_BAD, "mcp package not installed")
         failures += 1
