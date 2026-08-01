@@ -27,7 +27,7 @@ import io
 import shutil
 
 from ..errors import OcrFailedError
-from .base import ImageInput, OcrResult
+from .base import OcrResult, VisionImage
 
 # psm 3 = fully automatic page segmentation, no orientation detection. It handles
 # both dense paragraphs and terminal output acceptably; psm 6 ("uniform block")
@@ -92,10 +92,10 @@ class TesseractBackend:
         except Exception:  # noqa: BLE001
             return []
 
-    async def recognise(self, image: ImageInput, languages: str) -> OcrResult:
+    async def recognise(self, image: VisionImage, languages: str) -> OcrResult:
         return await asyncio.to_thread(self._recognise_sync, image, languages)
 
-    def _recognise_sync(self, image: ImageInput, languages: str) -> OcrResult:
+    def _recognise_sync(self, image: VisionImage, languages: str) -> OcrResult:
         available, reason = self.availability()
         if not available:
             raise OcrFailedError(
@@ -182,7 +182,7 @@ class NullOcrBackend:
     def installed_languages(self) -> list[str]:
         return []
 
-    async def recognise(self, image: ImageInput, languages: str) -> OcrResult:
+    async def recognise(self, image: VisionImage, languages: str) -> OcrResult:
         raise OcrFailedError(
             "OCR is disabled by configuration.",
             hint="Set MEDIA_MCP_OCR_BACKEND=tesseract to enable it.",

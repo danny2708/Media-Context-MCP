@@ -17,8 +17,10 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
+from typing import Annotated
+
 from pydantic import Field, SecretStr, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 AutoImageStrategy = Literal["ocr_first", "vision_first", "hybrid"]
 OcrBackendName = Literal["tesseract", "none"]
@@ -49,7 +51,9 @@ class Settings(BaseSettings):
     )
 
     # --- security -----------------------------------------------------------
-    allowed_roots: list[Path] = Field(default_factory=list)
+    # NoDecode: pydantic-settings would otherwise json.loads a list-typed env
+    # value before our validator can handle the pathsep-separated form.
+    allowed_roots: Annotated[list[Path], NoDecode] = Field(default_factory=list)
 
     # --- limits -------------------------------------------------------------
     max_file_mb: int = 50

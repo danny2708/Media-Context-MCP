@@ -1,6 +1,9 @@
-"""Processor selection: pure, inspectable heuristics plus the dispatching router."""
+"""Processor selection: pure, inspectable heuristics.
 
-from .heuristics import Capabilities, RoutingDecision, decide_route
-from .router import ProcessorRouter
+The dispatch itself (name -> processor instance) is a dict lookup in
+``pipeline.py``; a separate router class would only add indirection.
+"""
 
-__all__ = ["Capabilities", "ProcessorRouter", "RoutingDecision", "decide_route"]
+from .heuristics import Capabilities, RoutingDecision, classify_intent, decide_route
+
+__all__ = ["Capabilities", "RoutingDecision", "classify_intent", "decide_route"]

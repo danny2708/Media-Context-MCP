@@ -1,13 +1,18 @@
 """Vision backend speaking the OpenAI ``/chat/completions`` dialect.
 
 Any endpoint that accepts an OpenAI-style multimodal chat request works here:
-OpenAI, OpenRouter, Together, Groq, a local vLLM or Ollama shim. Nothing about a
-specific vendor is hard-coded -- the base URL, model name and key all come from
-configuration, and there is no default endpoint. If they are not set, the server
-says so instead of quietly calling somebody's API.
+OpenAI, OpenRouter, Together, the Hugging Face Inference Providers router, a local
+vLLM or Ollama shim. Nothing about a specific vendor is hard-coded -- the base URL,
+model name and key all come from configuration, and there is no default endpoint.
 
-Only the base URL the operator configured is ever contacted, and only when a
-processor explicitly asks for visual analysis.
+Chat Completions is used as the baseline deliberately: the Responses API, JSON
+schema output, and usage/provider metadata are all optional extras that many
+"OpenAI-compatible" implementations lack. This adapter assumes none of them --
+metadata is captured when present and left ``None`` when not.
+
+Only the base URL the operator configured is ever contacted, and only after the
+pipeline's cloud opt-in gate has passed. Authorization headers, API keys and image
+bytes never appear in logs or error messages.
 """
 
 from __future__ import annotations
@@ -15,23 +20,41 @@ from __future__ import annotations
 import asyncio
 import base64
 import random
+import time
 from typing import Any
 
 import httpx
 
-from ..errors import VisionProviderError
-from .base import ImageInput, VisionAnalysis
+from ..errors import (
+    MediaContextError,
+    VisionAuthenticationFailedError,
+    VisionEmptyResponseError,
+    VisionInvalidResponseError,
+    VisionModelUnavailableError,
+    VisionPermissionDeniedError,
+    VisionProviderError,
+    VisionProviderTimeoutError,
+    VisionQuotaExceededError,
+    VisionRateLimitedError,
+)
+from .base import VisionImage, VisionProviderResult
 
-# Retried: transient by definition. Everything else fails immediately, because
-# retrying a 400 just burns the caller's time and quota.
-_RETRYABLE_STATUS = {408, 409, 425, 429, 500, 502, 503, 504}
-
-_MAX_TOKENS = 2048
+# Response bodies larger than this are refused outright; a vision reply is text
+# and has no business being tens of megabytes.
+_MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 
 
-def _data_uri(image: ImageInput) -> str:
+def data_url(image: VisionImage) -> str:
+    """Base64 data URL with the MIME type of the *encoded bytes*."""
     encoded = base64.b64encode(image.data).decode("ascii")
     return f"data:{image.mime_type};base64,{encoded}"
+
+
+def _retry_after_seconds(response: httpx.Response) -> float | None:
+    value = response.headers.get("retry-after")
+    if value and value.isdigit():
+        return float(value)
+    return None
 
 
 class OpenAICompatibleVisionProvider:
@@ -43,34 +66,42 @@ class OpenAICompatibleVisionProvider:
         base_url: str,
         api_key: str,
         model: str,
-        timeout_seconds: float = 90.0,
-        max_retries: int = 2,
+        provider_label: str = "openai-compatible",
+        route: str = "",
+        timeout_seconds: float = 60.0,
+        max_retries: int = 1,
+        extra_headers: dict[str, str] | None = None,
         client: httpx.AsyncClient | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._api_key = api_key
         self._model = model
+        self._provider_label = provider_label
+        self._route = route
         self._timeout = timeout_seconds
         self._max_retries = max(0, max_retries)
+        self._extra_headers = extra_headers or {}
         self._client = client
         self._owns_client = client is None
 
     @property
-    def model(self) -> str:
+    def requested_model(self) -> str:
         return self._model
 
     @property
     def provider_name(self) -> str:
-        # The host, not the key or the full URL: enough to identify where data went,
-        # with no credentials in it.
+        # Label plus host: enough to identify where data went, no credentials.
         try:
-            return httpx.URL(self._base_url).host or self._base_url
+            host = httpx.URL(self._base_url).host or self._base_url
         except (httpx.InvalidURL, ValueError):  # pragma: no cover - defensive
-            return "vision-provider"
+            host = "?"
+        return f"{self._provider_label} ({host})"
 
     def _get_client(self) -> httpx.AsyncClient:
         if self._client is None:
-            self._client = httpx.AsyncClient(timeout=self._timeout)
+            self._client = httpx.AsyncClient(
+                timeout=httpx.Timeout(self._timeout, connect=min(10.0, self._timeout))
+            )
         return self._client
 
     async def aclose(self) -> None:
@@ -78,91 +109,233 @@ class OpenAICompatibleVisionProvider:
             await self._client.aclose()
             self._client = None
 
-    def _build_payload(
-        self, image: ImageInput, prompt: str, system: str | None
+    def build_payload(
+        self,
+        images: list[VisionImage],
+        prompt: str,
+        system: str | None,
+        max_output_tokens: int,
     ) -> dict[str, Any]:
+        """Chat Completions multimodal payload: text part first, then each image
+        in order (tile order matters for tiled inputs)."""
+        content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
+        for image in images:
+            content.append(
+                {"type": "image_url", "image_url": {"url": data_url(image)}}
+            )
         messages: list[dict[str, Any]] = []
         if system:
             messages.append({"role": "system", "content": system})
-        messages.append(
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": _data_uri(image)}},
-                ],
-            }
-        )
+        messages.append({"role": "user", "content": content})
         return {
             "model": self._model,
             "messages": messages,
-            "max_tokens": _MAX_TOKENS,
-            # Deterministic-as-possible: the same screenshot should not produce a
-            # different reading on a cache miss than it did on the first call.
+            "max_tokens": max_output_tokens,
+            # Deterministic-as-possible: the same screenshot should not read
+            # differently on a cache miss than it did the first time.
             "temperature": 0,
         }
 
     async def analyze(
         self,
-        image: ImageInput,
-        prompt: str,
         *,
+        images: list[VisionImage],
+        prompt: str,
         system: str | None = None,
-    ) -> VisionAnalysis:
+        max_output_tokens: int,
+        request_id: str,
+    ) -> VisionProviderResult:
+        if not images:
+            raise VisionInvalidResponseError(
+                "analyze() called with no images.",
+                hint="This is an internal routing bug; report it.",
+            )
+
         url = f"{self._base_url}/chat/completions"
         headers = {
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",
+            **self._extra_headers,
         }
-        payload = self._build_payload(image, prompt, system)
+        payload = self.build_payload(images, prompt, system, max_output_tokens)
+        started = time.perf_counter()
 
-        last_error: str = "unknown error"
-        for attempt in range(self._max_retries + 1):
+        attempt = 0
+        while True:
+            retryable, error = None, None
             try:
                 response = await self._get_client().post(
                     url, json=payload, headers=headers, timeout=self._timeout
                 )
-            except httpx.TimeoutException as exc:
-                last_error = f"request timed out after {self._timeout:.0f}s ({exc.__class__.__name__})"
+            except asyncio.CancelledError:
+                # The caller gave up; stop immediately, no retry.
+                raise
+            except httpx.TimeoutException:
+                error = VisionProviderTimeoutError(
+                    f"Vision provider did not answer within {self._timeout:.0f}s.",
+                    hint=(
+                        "Retry once, raise MEDIA_MCP_VISION_TIMEOUT_SECONDS, or pick a "
+                        "faster model. Nothing was analysed."
+                    ),
+                    details={"provider": self.provider_name, "request_id": request_id},
+                )
+                retryable = True
             except httpx.HTTPError as exc:
-                last_error = f"network error: {exc.__class__.__name__}: {exc}"
+                error = VisionProviderError(
+                    f"Network error talking to the vision provider: "
+                    f"{exc.__class__.__name__}.",
+                    hint="Check MEDIA_MCP_VISION_BASE_URL and connectivity.",
+                    details={"provider": self.provider_name, "request_id": request_id},
+                )
+                retryable = True
             else:
                 if response.status_code == 200:
-                    return self._parse(response.json())
-                body = _safe_body(response)
-                last_error = f"HTTP {response.status_code}: {body}"
-                if response.status_code not in _RETRYABLE_STATUS:
-                    raise VisionProviderError(
-                        f"Vision provider rejected the request ({last_error}).",
-                        hint=_hint_for_status(response.status_code),
-                        details={"status": response.status_code, "provider": self.provider_name},
-                    )
+                    if len(response.content) > _MAX_RESPONSE_BYTES:
+                        raise VisionInvalidResponseError(
+                            "Vision provider response exceeds the size limit.",
+                            details={"bytes": len(response.content)},
+                        )
+                    duration_ms = int((time.perf_counter() - started) * 1000)
+                    return self._parse(response.json(), duration_ms)
+                error, retryable = self._map_http_error(response, request_id)
 
-            if attempt < self._max_retries:
-                # Full jitter: retries from several concurrent calls do not line up.
-                delay = min(8.0, 0.5 * (2**attempt)) * (0.5 + random.random() / 2)
-                await asyncio.sleep(delay)
+            assert error is not None
+            if not retryable or attempt >= self._max_retries:
+                raise error
+            attempt += 1
+            # Bounded retry with full jitter; honours Retry-After when one is known.
+            base_delay = error.details.get("retry_after_seconds") or min(
+                4.0, 0.5 * (2**attempt)
+            )
+            await asyncio.sleep(float(base_delay) * (0.5 + random.random() / 2))
 
-        raise VisionProviderError(
-            f"Vision provider failed after {self._max_retries + 1} attempt(s): {last_error}",
-            hint=(
-                "Check MEDIA_MCP_VISION_BASE_URL and that the host is reachable, then "
-                "retry. Nothing was analysed visually; no result is being guessed."
+    def _map_http_error(
+        self, response: httpx.Response, request_id: str
+    ) -> tuple[MediaContextError, bool]:
+        """Map an HTTP failure to a stable error code and a retryability flag.
+
+        Policy (from the addendum): 401/403 never retried; 429 never retried
+        immediately (the error carries retry metadata instead); timeouts and
+        502/503/504 retried at most ``max_retries`` times; other 4xx never.
+        """
+        status = response.status_code
+        body = _safe_body(response)
+        details: dict[str, Any] = {
+            "status": status,
+            "provider": self.provider_name,
+            "request_id": request_id,
+        }
+
+        if status == 401:
+            return (
+                VisionAuthenticationFailedError(
+                    "Vision provider rejected the API key (401).",
+                    hint=(
+                        "Check MEDIA_MCP_VISION_API_KEY. For Hugging Face, the token "
+                        "needs the 'inference.serverless' permission."
+                    ),
+                    details=details,
+                ),
+                False,
+            )
+        if status == 403:
+            return (
+                VisionPermissionDeniedError(
+                    "Vision provider denied access to this model (403).",
+                    hint=(
+                        "The key is valid but not allowed to use "
+                        f"'{self._model}'. Some models require accepting a license on "
+                        "the provider's site, or a paid tier."
+                    ),
+                    details=details,
+                ),
+                False,
+            )
+        if status == 402:
+            return (
+                VisionQuotaExceededError(
+                    "Vision provider reports exhausted credits (402).",
+                    hint=(
+                        "The account's inference credits are used up. Add credits, or "
+                        "switch MEDIA_MCP_VISION_MODEL/provider. Treat free credits as "
+                        "trial capacity, not unlimited inference."
+                    ),
+                    details=details,
+                ),
+                False,
+            )
+        if status == 429:
+            retry_after = _retry_after_seconds(response)
+            if retry_after is not None:
+                details["retry_after_seconds"] = retry_after
+            quota_like = "quota" in body.lower() or "credit" in body.lower()
+            error_cls = VisionQuotaExceededError if quota_like else VisionRateLimitedError
+            return (
+                error_cls(
+                    "Vision provider rate-limited or out of quota (429).",
+                    hint=(
+                        f"Wait{f' {retry_after:.0f}s' if retry_after else ''} and retry, "
+                        "or reduce request rate. Repeated immediate retries would make "
+                        "it worse, so none were attempted."
+                    ),
+                    details=details,
+                ),
+                False,
+            )
+        if status in {404, 410}:
+            return (
+                VisionModelUnavailableError(
+                    f"Model or endpoint not found ({status}).",
+                    hint=(
+                        f"'{self._model}' may not exist on this provider, may have been "
+                        "retired, or MEDIA_MCP_VISION_BASE_URL may point at the wrong "
+                        "API root (it should be the part before /chat/completions). "
+                        "The configured model was NOT silently replaced."
+                    ),
+                    details=details,
+                ),
+                False,
+            )
+        if status in {502, 503, 504}:
+            return (
+                VisionModelUnavailableError(
+                    f"Vision provider temporarily unavailable ({status}).",
+                    hint="Transient upstream failure; one bounded retry is attempted.",
+                    details=details,
+                ),
+                True,
+            )
+        if status in {408, 409, 425}:
+            return (
+                VisionProviderTimeoutError(
+                    f"Vision provider timed out upstream ({status}).",
+                    details=details,
+                ),
+                True,
+            )
+        return (
+            VisionProviderError(
+                f"Vision provider rejected the request (HTTP {status}): {body[:200]}",
+                hint=(
+                    "A 4xx other than auth/rate-limit usually means the model does not "
+                    "accept image input, or the payload shape is unsupported. Check "
+                    "that MEDIA_MCP_VISION_MODEL is a multimodal model."
+                ),
+                details=details,
             ),
-            details={"provider": self.provider_name, "attempts": self._max_retries + 1},
+            False,
         )
 
-    def _parse(self, body: dict[str, Any]) -> VisionAnalysis:
+    def _parse(self, body: dict[str, Any], duration_ms: int) -> VisionProviderResult:
         try:
             choice = body["choices"][0]
             content = choice["message"]["content"]
         except (KeyError, IndexError, TypeError) as exc:
-            raise VisionProviderError(
+            raise VisionInvalidResponseError(
                 "Vision provider returned a response in an unexpected shape.",
                 hint=(
-                    "The endpoint may not be OpenAI-compatible. Verify "
-                    "MEDIA_MCP_VISION_BASE_URL points at the API root that serves "
-                    "/chat/completions."
+                    "The endpoint may not be OpenAI-compatible. Verify the base URL "
+                    "serves /chat/completions."
                 ),
             ) from exc
 
@@ -172,11 +345,12 @@ class OpenAICompatibleVisionProvider:
                 part.get("text", "") for part in content if isinstance(part, dict)
             )
         if not isinstance(content, str) or not content.strip():
-            raise VisionProviderError(
+            raise VisionEmptyResponseError(
                 "Vision provider returned an empty response.",
                 hint=(
-                    "The model may have refused the image or hit a content filter. "
-                    "Try a different model, or use mode='ocr' for text-only extraction."
+                    "The model may have refused the image or hit a content filter. Try "
+                    "a different model, or mode='ocr' for local text extraction. This "
+                    "failure is not cached; a retry will re-ask the provider."
                 ),
             )
 
@@ -184,25 +358,28 @@ class OpenAICompatibleVisionProvider:
         finish = choice.get("finish_reason")
         if finish == "length":
             warnings.append(
-                "The vision model stopped because it reached its output token limit; "
-                "its description of this image is incomplete."
+                "The vision model stopped at its output-token limit "
+                "(MEDIA_MCP_VISION_MAX_OUTPUT_TOKENS); the reading is incomplete."
             )
 
-        return VisionAnalysis(
-            text=content,
-            model=body.get("model") or self._model,
+        usage = body.get("usage") or {}
+        return VisionProviderResult(
+            content=content,
+            provider=self.provider_name,
+            requested_model=self._model,
+            # Only trust reported metadata; never echo the request back as fact.
+            actual_model=body.get("model") if body.get("model") else None,
+            provider_route=body.get("provider") or body.get("system_fingerprint"),
             finish_reason=finish,
-            usage=body.get("usage") or {},
+            input_tokens=usage.get("prompt_tokens"),
+            output_tokens=usage.get("completion_tokens"),
+            duration_ms=duration_ms,
             warnings=warnings,
         )
 
 
 def _safe_body(response: httpx.Response) -> str:
-    """A short, credential-free excerpt of an error body.
-
-    Provider error bodies sometimes echo the request, so the excerpt is capped and
-    any bearer token that appears is stripped.
-    """
+    """A short, credential-free excerpt of an error body."""
     try:
         text = response.text[:400]
     except Exception:  # noqa: BLE001 - a broken body must not mask the real error
@@ -210,22 +387,25 @@ def _safe_body(response: httpx.Response) -> str:
     return text.replace("Bearer ", "Bearer <redacted> ")
 
 
-def _hint_for_status(status: int) -> str:
-    if status == 401 or status == 403:
-        return (
-            "Authentication failed. Check MEDIA_MCP_VISION_API_KEY, and that the key "
-            "is valid for MEDIA_MCP_VISION_BASE_URL."
-        )
-    if status == 404:
-        return (
-            "Endpoint not found. MEDIA_MCP_VISION_BASE_URL should be the API root "
-            "(the part before /chat/completions), e.g. https://api.openai.com/v1."
-        )
-    if status == 413:
-        return "The image was too large for this provider. Lower MEDIA_MCP_MAX_IMAGE_PIXELS."
-    if status == 400:
-        return (
-            "The provider rejected the request. The configured model may not accept "
-            "images; check MEDIA_MCP_VISION_MODEL is a multimodal model."
-        )
-    return "See the provider's status page or logs for details."
+def build_vision_provider(settings: Any) -> OpenAICompatibleVisionProvider | None:
+    """Construct the provider from settings, or ``None`` when not configured.
+
+    The ``huggingface`` value of MEDIA_MCP_VISION_PROVIDER is a configuration
+    preset over this same class: it fills the router base URL and forwards the
+    optional billing header. There is no HF-specific code path beyond that.
+    """
+    if not settings.vision_configured:
+        return None
+    extra_headers: dict[str, str] = {}
+    if settings.vision_provider == "huggingface" and settings.hf_bill_to:
+        extra_headers["X-HF-Bill-To"] = settings.hf_bill_to
+    return OpenAICompatibleVisionProvider(
+        base_url=settings.effective_vision_base_url,
+        api_key=settings.vision_api_key.get_secret_value(),
+        model=settings.effective_vision_model,
+        provider_label=settings.vision_provider,
+        route=settings.vision_route,
+        timeout_seconds=settings.vision_timeout_seconds,
+        max_retries=settings.vision_max_retries,
+        extra_headers=extra_headers,
+    )
