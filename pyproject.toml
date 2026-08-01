@@ -1,0 +1,71 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "media-context-mcp"
+version = "0.1.0"
+description = "Local MCP server that gives text-only coding agents the ability to read images, screenshots, PDFs, and Office documents."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.11"
+authors = [{ name = "Media Context MCP contributors" }]
+keywords = ["mcp", "model-context-protocol", "markitdown", "ocr", "vision", "opencode"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Text Processing :: Markup :: Markdown",
+]
+
+dependencies = [
+    "mcp>=2.0.0",
+    "markitdown[docx,pptx,xlsx,xls,pdf,outlook]>=0.1.7,<0.2",
+    "pymupdf>=1.24",
+    "pillow>=10.0",
+    "httpx>=0.27",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+ocr = ["pytesseract>=0.3.13"]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "python-docx>=1.1",
+    "ruff>=0.6",
+]
+all = ["media-context-mcp[ocr,dev]"]
+
+[project.scripts]
+media-context-mcp = "media_context_mcp.cli:main"
+media-context-mcp-server = "media_context_mcp.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/your-org/media-context-mcp"
+Issues = "https://github.com/your-org/media-context-mcp/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/media_context_mcp"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+filterwarnings = ["ignore::DeprecationWarning"]
+markers = [
+    "requires_tesseract: test needs the tesseract binary on PATH",
+    "requires_vision: test needs a configured live vision provider",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = ["B008"]
