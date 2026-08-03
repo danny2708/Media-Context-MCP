@@ -246,6 +246,44 @@ def prepare_for_vision(
     )
 
 
+def prepare_for_vision_multipass(
+    image: Image.Image,
+    config: PreprocessConfig,
+    *,
+    label: str = "",
+    source_page: int | None = None,
+) -> tuple[list[VisionImage], list[str]]:
+    """Produce multi-pass payloads for a long image: Overview Pass + Detailed Tile Passes."""
+    notes: list[str] = []
+    original_size = image.size
+    aspect = max(image.size) / max(1, min(image.size))
+
+    if aspect >= _TILING_ASPECT_THRESHOLD and max(image.size) > config.max_dimension:
+        # Pass 1: Global low-res overview
+        scale = config.max_dimension / max(image.size)
+        overview_size = (max(1, round(image.width * scale)), max(1, round(image.height * scale)))
+        overview_img = image.resize(overview_size, Image.Resampling.LANCZOS)
+        overview_encoded = _encode(
+            overview_img,
+            config,
+            label=f"{label} [overview pass]" if label else "overview pass",
+            source_page=source_page,
+            tile_index=0,  # 0 indicates global overview
+            original_size=original_size,
+        )
+
+        # Pass 2: Overlapping native detailed tiles
+        tiles = _tile_long_image(image, config, label=label, source_page=source_page)
+        if tiles:
+            notes.append(
+                f"Multi-pass long image processing: overview pass ({overview_size[0]}x{overview_size[1]}) "
+                f"plus {len(tiles)} overlapping native tiles for detailed spatial perception."
+            )
+            return [overview_encoded] + tiles, notes
+
+    return prepare_for_vision(image, config, label=label, source_page=source_page)
+
+
 def _tile_long_image(
     image: Image.Image,
     config: PreprocessConfig,
