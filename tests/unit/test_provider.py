@@ -82,8 +82,10 @@ def test_payload_structure_and_image_order():
     assert payload["messages"][0] == {"role": "system", "content": "SYSTEM"}
     user_content = payload["messages"][1]["content"]
     assert user_content[0] == {"type": "text", "text": "PROMPT"}
-    assert user_content[1]["image_url"]["url"].startswith("data:image/png")
-    assert user_content[2]["image_url"]["url"].startswith("data:image/jpeg")
+    assert user_content[1]["type"] == "text"
+    assert user_content[2]["image_url"]["url"].startswith("data:image/png")
+    assert user_content[3]["type"] == "text"
+    assert user_content[4]["image_url"]["url"].startswith("data:image/jpeg")
 
 
 def test_api_key_only_in_auth_header_never_in_body():

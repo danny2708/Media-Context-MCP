@@ -57,6 +57,33 @@ def _retry_after_seconds(response: httpx.Response) -> float | None:
     return None
 
 
+def image_manifest_line(index: int, total: int, image: VisionImage) -> str:
+    """Explicit textual manifest description for an image input in a multi-image payload."""
+    if image.role == "overview":
+        orig_w = image.original_width or image.width
+        orig_h = image.original_height or image.height
+        return (
+            f"[Image {index} of {total}: Downscaled global overview pass of the full "
+            f"{orig_w}x{orig_h} screenshot]."
+        )
+
+    if image.source_x is not None and image.source_y is not None:
+        sx = image.source_x
+        sy = image.source_y
+        sw = image.source_width or image.width
+        sh = image.source_height or image.height
+        return (
+            f"[Image {index} of {total}: Native-resolution detail tile covering "
+            f"x={sx}-{sx + sw}, y={sy}-{sy + sh} of the original image. "
+            f"Adjacent detail tiles overlap by 96px; do not count duplicated components in overlapping regions twice]."
+        )
+
+    if image.label:
+        return f"[Image {index} of {total}: {image.label}]"
+
+    return f"[Image {index} of {total}]"
+
+
 class OpenAICompatibleVisionProvider:
     """Async client for an OpenAI-compatible multimodal chat endpoint."""
 
@@ -116,10 +143,16 @@ class OpenAICompatibleVisionProvider:
         system: str | None,
         max_output_tokens: int,
     ) -> dict[str, Any]:
-        """Chat Completions multimodal payload: text part first, then each image
-        in order (tile order matters for tiled inputs)."""
+        """Chat Completions multimodal payload: text part first, then interleaved
+        manifest text lines and image_url blocks in order."""
         content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
-        for image in images:
+        has_multiple_or_spatial = len(images) > 1 or any(
+            img.role == "overview" or img.source_y is not None for img in images
+        )
+        for idx, image in enumerate(images, start=1):
+            if has_multiple_or_spatial:
+                manifest_text = image_manifest_line(idx, len(images), image)
+                content.append({"type": "text", "text": manifest_text})
             content.append(
                 {"type": "image_url", "image_url": {"url": data_url(image)}}
             )
@@ -131,8 +164,6 @@ class OpenAICompatibleVisionProvider:
             "model": self._model,
             "messages": messages,
             "max_tokens": max_output_tokens,
-            # Deterministic-as-possible: the same screenshot should not read
-            # differently on a cache miss than it did the first time.
             "temperature": 0,
         }
 
