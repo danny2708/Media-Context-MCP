@@ -31,6 +31,7 @@ class BenchmarkCase:
     mode: str = "auto"
     # Substrings that must appear somewhere in the returned markdown.
     must_contain: list[str] = field(default_factory=list)
+    vision_profile: str = "auto"
     needs_ocr: bool = False
     needs_vision: bool = False
 
@@ -73,7 +74,24 @@ CASES: list[BenchmarkCase] = [
         name="ui-screenshot-vision",
         fixture="ui_png",
         question="Which button is disabled, and what validation error is shown?",
+        vision_profile="ui_structure",
         must_contain=["Save", "email"],
+        needs_vision=True,
+    ),
+    BenchmarkCase(
+        name="ui-alignment-spatial",
+        fixture="ui_png",
+        question="Analyze UI spatial alignment and spacing anomalies.",
+        vision_profile="ui_alignment",
+        must_contain=["Save"],
+        needs_vision=True,
+    ),
+    BenchmarkCase(
+        name="ui-grounding-bbox",
+        fixture="ui_png",
+        question="Extract normalized 0-1000 bounding boxes for UI components.",
+        vision_profile="ui_grounding",
+        must_contain=["Save"],
         needs_vision=True,
     ),
     BenchmarkCase(

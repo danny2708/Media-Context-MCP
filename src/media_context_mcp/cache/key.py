@@ -61,6 +61,7 @@ def build_cache_key(
         "schema": KEY_SCHEMA_VERSION,
         "sha256": sha256,
         "mode": request.mode,
+        "vision_profile": request.vision_profile,
         "detail": request.detail,
         "pages": normalise_pages(request.pages),
         "question": hashlib.sha256(
