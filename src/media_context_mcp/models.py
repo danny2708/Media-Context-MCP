@@ -80,11 +80,84 @@ class SourceInfo(BaseModel):
     sha256: str
 
 
+class VisionProfile(str, Enum):
+    """Explicit vision processing profile contract."""
+
+    AUTO = "auto"
+    GENERAL = "general"
+    UI_STRUCTURE = "ui_structure"
+    UI_ALIGNMENT = "ui_alignment"
+    UI_GROUNDING = "ui_grounding"
+    TERMINAL = "terminal"
+    CHART = "chart"
+    DIAGRAM = "diagram"
+    SCANNED_DOCUMENT = "scanned_document"
+
+
+class BoundingBox(BaseModel):
+    """Normalized [x_min, y_min, x_max, y_max] coordinate in a 0-1000 space."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    x_min: int = Field(ge=0, le=1000)
+    y_min: int = Field(ge=0, le=1000)
+    x_max: int = Field(ge=0, le=1000)
+    y_max: int = Field(ge=0, le=1000)
+
+
+class UiComponent(BaseModel):
+    """Structured representation of a recognized UI element."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    label: str
+    type: str  # button, text_input, card, container, navbar, etc.
+    bbox: BoundingBox | None = None
+    children_ids: list[str] = Field(default_factory=list)
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+
+
+class UiLayout(BaseModel):
+    """Structured inference of container CSS layout behavior."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    display: str | None = None  # flex, grid, block
+    direction: str | None = None  # row, column
+    columns: int | None = None
+    gap_estimate_px: int | None = None
+
+
+class UiIssue(BaseModel):
+    """Detected UI spatial misalignment, clipping, or overflow."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: str  # vertical_misalignment, horizontal_misalignment, clipping, overflow
+    components: list[str] = Field(default_factory=list)
+    evidence: str
+    severity: str = "medium"  # low, medium, high
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+
+
+class UiSpatialAnalysis(BaseModel):
+    """3-tier structured spatial perception payload."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    observed_components: list[UiComponent] = Field(default_factory=list)
+    inferred_layout: UiLayout | None = None
+    issues: list[UiIssue] = Field(default_factory=list)
+    recommendations: list[str] = Field(default_factory=list)
+
+
 class RequestInfo(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     question: str | None = None
     mode: AnalysisMode
+    vision_profile: VisionProfile = VisionProfile.AUTO
     pages: str | None = None
     detail: DetailLevel
     max_chars: int
@@ -178,6 +251,7 @@ class AnalyzeMediaRequest(BaseModel):
     path: str
     question: str | None = None
     mode: AnalysisMode = "auto"
+    vision_profile: VisionProfile = VisionProfile.AUTO
     pages: str | None = None
     detail: DetailLevel = "normal"
     max_chars: int

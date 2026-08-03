@@ -91,6 +91,7 @@ def create_server() -> MCPServer:
         path: str,
         question: str | None = None,
         mode: str = "auto",
+        vision_profile: str = "auto",
         pages: str | None = None,
         detail: str = "normal",
         max_chars: int | None = None,
@@ -103,6 +104,8 @@ def create_server() -> MCPServer:
             question: What you need from the file; the analysis optimises around it.
             mode: auto (default) | document (text layers only) | ocr (local text
                 extraction only, never cloud) | vision (visual semantic analysis).
+            vision_profile: auto (default) | general | ui_structure | ui_alignment |
+                ui_grounding | terminal | chart | diagram | scanned_document.
             pages: 1-based page/slide selection like "1", "1-5", "1,3,7", "1-3,8".
             detail: compact | normal | full.
             max_chars: Output budget; capped by the server's configured maximum.
@@ -118,6 +121,22 @@ def create_server() -> MCPServer:
                     code=ErrorCode.INVALID_ARGUMENT,
                     hint="Use mode='auto' unless you specifically need to force a path.",
                 )
+            if vision_profile not in {
+                "auto",
+                "general",
+                "ui_structure",
+                "ui_alignment",
+                "ui_grounding",
+                "terminal",
+                "chart",
+                "diagram",
+                "scanned_document",
+            }:
+                raise MediaContextError(
+                    f"vision_profile invalid, got '{vision_profile}'.",
+                    code=ErrorCode.INVALID_ARGUMENT,
+                    hint="Use vision_profile='auto' or one of ui_structure|ui_alignment|ui_grounding|...",
+                )
             if detail not in {"compact", "normal", "full"}:
                 raise MediaContextError(
                     f"detail must be one of compact|normal|full, got '{detail}'.",
@@ -132,6 +151,7 @@ def create_server() -> MCPServer:
                 path=path,
                 question=question,
                 mode=mode,  # type: ignore[arg-type]
+                vision_profile=vision_profile,  # type: ignore[arg-type]
                 pages=pages,
                 detail=detail,  # type: ignore[arg-type]
                 max_chars=effective_max,
