@@ -46,7 +46,13 @@ from ..routing.heuristics import (
     vision_unusable_error,
 )
 from .base import ProcessingContext
-from .imaging import PreprocessConfig, open_image, prepare_for_ocr, prepare_for_vision
+from .imaging import (
+    PreprocessConfig,
+    open_image,
+    prepare_for_ocr,
+    prepare_for_vision,
+    prepare_for_vision_multipass,
+)
 from .ocr import OCR_SCOPE_NOTE, fenced, ocr_evidence, ocr_summary
 
 
@@ -150,9 +156,30 @@ class ImageProcessor:
                     return result
                 raise vision_unusable_error_typed(context)
 
-            vision_payloads, notes = prepare_for_vision(
-                image, preprocess, label=context.info.name
+            explicit_profile = (
+                None
+                if request.vision_profile.value == "auto"
+                else request.vision_profile.value
             )
+            profile = select_profile(
+                request.question,
+                explicit_profile=explicit_profile,
+            )
+
+            is_ui_profile = profile.key in {
+                "ui_screenshot",
+                "ui_structure",
+                "ui_alignment",
+                "ui_grounding",
+            }
+            if is_ui_profile:
+                vision_payloads, notes = prepare_for_vision_multipass(
+                    image, preprocess, label=context.info.name
+                )
+            else:
+                vision_payloads, notes = prepare_for_vision(
+                    image, preprocess, label=context.info.name
+                )
             for note in notes:
                 context.warn(note)
 
@@ -169,7 +196,6 @@ class ImageProcessor:
                         "in the evidence below."
                     )
 
-            profile = select_profile(request.question)
             prompt = build_vision_prompt(
                 profile,
                 question=request.question,

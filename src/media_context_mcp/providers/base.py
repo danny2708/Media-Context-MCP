@@ -30,6 +30,12 @@ class VisionImage:
     label: str = ""
     source_page: int | None = None
     tile_index: int | None = None
+    role: str = "detail"  # overview | detail
+    sequence_index: int = 0
+    source_x: int | None = None
+    source_y: int | None = None
+    source_width: int | None = None
+    source_height: int | None = None
     original_width: int | None = None
     original_height: int | None = None
 

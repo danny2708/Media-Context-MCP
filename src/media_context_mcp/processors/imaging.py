@@ -94,13 +94,14 @@ def _encode(
     source_page: int | None,
     tile_index: int | None,
     original_size: tuple[int, int],
+    role: str = "detail",
+    sequence_index: int = 0,
+    source_x: int | None = None,
+    source_y: int | None = None,
+    source_width: int | None = None,
+    source_height: int | None = None,
 ) -> VisionImage:
-    """Encode with the configured format policy.
-
-    ``auto``: PNG first (lossless -- text stays crisp), high-quality JPEG only when
-    the PNG would blow the byte budget. The MIME type is set from the encoding that
-    actually happened, never from a file extension.
-    """
+    """Encode with the configured format policy."""
     fmt = config.image_format
     data: bytes
     mime: str
@@ -117,8 +118,6 @@ def _encode(
         data, mime = buffer.getvalue(), "image/jpeg"
 
     if len(data) > config.max_bytes:
-        # Still too big: downscale by area until under budget. This is a last
-        # resort; the tiler should normally have prevented it.
         scale = (config.max_bytes / len(data)) ** 0.5 * 0.95
         new_size = (max(1, round(image.width * scale)), max(1, round(image.height * scale)))
         shrunk = image.resize(new_size, Image.Resampling.LANCZOS)
@@ -129,6 +128,12 @@ def _encode(
             source_page=source_page,
             tile_index=tile_index,
             original_size=original_size,
+            role=role,
+            sequence_index=sequence_index,
+            source_x=source_x,
+            source_y=source_y,
+            source_width=source_width,
+            source_height=source_height,
         )
 
     return VisionImage(
@@ -139,6 +144,12 @@ def _encode(
         label=label,
         source_page=source_page,
         tile_index=tile_index,
+        role=role,
+        sequence_index=sequence_index,
+        source_x=source_x if source_x is not None else 0,
+        source_y=source_y if source_y is not None else 0,
+        source_width=source_width if source_width is not None else original_size[0],
+        source_height=source_height if source_height is not None else original_size[1],
         original_width=original_size[0],
         original_height=original_size[1],
     )
@@ -270,6 +281,12 @@ def prepare_for_vision_multipass(
             source_page=source_page,
             tile_index=0,  # 0 indicates global overview
             original_size=original_size,
+            role="overview",
+            sequence_index=1,
+            source_x=0,
+            source_y=0,
+            source_width=original_size[0],
+            source_height=original_size[1],
         )
 
         # Pass 2: Overlapping native detailed tiles
@@ -291,11 +308,7 @@ def _tile_long_image(
     label: str,
     source_page: int | None,
 ) -> list[VisionImage]:
-    """Cut a long image into <= MAX_TILES overlapping strips along its long axis.
-
-    Returns ``[]`` when even MAX_TILES tiles cannot keep each strip within the
-    dimension limit -- the caller then falls back to downscaling.
-    """
+    """Cut a long image into <= MAX_TILES overlapping strips along its long axis."""
     vertical = image.height >= image.width
     long_edge = image.height if vertical else image.width
     short_edge = image.width if vertical else image.height
@@ -318,9 +331,11 @@ def _tile_long_image(
         if vertical:
             box = (0, start, image.width, end)
             region = f"y={start}-{end}"
+            sx, sy, sw, sh = 0, start, image.width, end - start
         else:
             box = (start, 0, end, image.height)
             region = f"x={start}-{end}"
+            sx, sy, sw, sh = start, 0, end - start, image.height
         crop = image.crop(box)
         tile_label = f"{label} [tile {index + 1}/{tile_count}, {region}]" if label else (
             f"tile {index + 1}/{tile_count}, {region}"
@@ -333,6 +348,12 @@ def _tile_long_image(
                 source_page=source_page,
                 tile_index=index + 1,
                 original_size=image.size,
+                role="detail",
+                sequence_index=index + 2,  # 1 is overview when present
+                source_x=sx,
+                source_y=sy,
+                source_width=sw,
+                source_height=sh,
             )
         )
     return tiles
