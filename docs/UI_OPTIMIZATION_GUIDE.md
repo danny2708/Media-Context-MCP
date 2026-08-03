@@ -6,31 +6,31 @@ This guide explains how to get the highest precision spatial layout, component h
 
 ## 1. How UI Screenshot Processing Works
 
-When a UI screenshot is processed with `mode="vision"` (or `mode="auto"` with a visual question):
+When a UI screenshot is processed with `mode="vision"` (or `mode="auto"`):
 
-1. **Intent & Profile Selection**:
-   Questions mentioning terms like `UI screenshot`, `layout`, `spatial alignment`, `component hierarchy`, `flex`, `grid`, or `misalignment` automatically trigger the **`ui_screenshot` prompt profile**.
+1. **Explicit `vision_profile` Contract**:
+   Instead of relying on heuristic keyword guessing, pass an explicit `vision_profile` parameter (`ui_structure`, `ui_alignment`, `ui_grounding`). Question keyword matching serves as a fallback heuristic only when `vision_profile="auto"`.
 
-2. **Native Overlapping Tiling**:
-   Long scroll screenshots (aspect ratio $\ge 2.5$) are automatically cut into up to 4 overlapping strips (`96px` overlap) at 100% native resolution rather than downscaling. This preserves small text (11px/12px fonts), 1px border lines, and precise spacing.
+2. **Multi-Pass Long Screenshot Processing**:
+   Long scroll screenshots (aspect ratio $\ge 2.5$) execute a **2-pass payload**:
+   - **Pass 1 (Overview)**: Global downscaled overview pass (`overview`) to capture overall layout hierarchy and macro structure.
+   - **Pass 2 (Native Tiles)**: Overlapping native-resolution detail tiles (`detail`, `96px` overlap) to preserve 11px text and pixel-precise alignments.
 
-3. **Structured Output**:
-   The output returns structured sections:
-   - **Component Hierarchy & Tree**: DOM-like parent/child nesting (e.g., `App -> Sidebar -> NavLink`).
-   - **Spatial Layout & CSS Mechanics**: `flex-row`, `flex-column`, `grid`, and relative spatial positions (`left-of`, `above`, `below`).
-   - **Anomalies & Misalignments**: Clipped text, improper padding/margin, overlapping elements, or state errors.
+3. **VLM Interleaved Tile Manifests**:
+   Each image payload sent to the VLM is prepended with explicit manifest metadata (`[Image N of M: Native-resolution detail tile covering x=0-1440, y=0-4096...]`). This gives the VLM exact spatial coordinates and prevents double-counting elements in overlapping regions.
 
 ---
 
-## 2. Recommended Question Format for AI Agents
+## 2. Recommended Usage for AI Agents
 
-AI Agents should format the `question` argument using canonical English keywords to guarantee accurate intent classification:
+AI Agents should pass the explicit `vision_profile` parameter in tool calls:
 
 ```json
 {
   "path": "shots/ui-layout-issue.png",
   "mode": "vision",
-  "question": "UI screenshot spatial layout and component hierarchy: Analyze container nesting, relative positions of buttons and inputs, flex/grid directions, and report any visual misalignments or spacing anomalies."
+  "vision_profile": "ui_alignment",
+  "question": "Compare the vertical alignment of the date inputs and filter button."
 }
 ```
 
