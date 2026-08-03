@@ -16,6 +16,9 @@ from dataclasses import dataclass
 
 GENERAL = "general"
 UI_SCREENSHOT = "ui_screenshot"
+UI_STRUCTURE = "ui_structure"
+UI_ALIGNMENT = "ui_alignment"
+UI_GROUNDING = "ui_grounding"
 TERMINAL_OR_ERROR = "terminal_or_error"
 CODE_SCREENSHOT = "code_screenshot"
 TABLE = "table"
@@ -49,21 +52,61 @@ If the image is mostly text, prioritise transcription over description.
         title="User-interface screenshot",
         instructions="""
 Report the interface, not the aesthetics:
+- **Visual Component Hierarchy**: Represent containers and nested components in a logical visual tree (e.g. App -> Header / Sidebar / Main Panel -> Card -> ButtonGroup).
 - **Visible text**: every label, heading, field value, placeholder, tooltip, menu item
   and button caption, transcribed exactly.
-- **Components**: what each control is (button, text input, checkbox, radio, toggle,
-  dropdown, tab, modal, toast, table, ...).
-- **Layout**: what contains what, and what sits above/below/left/right of what. Name
-  regions the way a developer would (header, sidebar, main panel, footer, dialog).
+- **Components & Controls**: identify each control precisely (button, text input, checkbox, radio, toggle,
+  dropdown, tab, modal, toast, table, card, navigation link, badge, spinner, ...).
+- **Spatial Layout & Likely CSS Mechanics**: describe containers and direction (flex-row vs flex-column, grid columns),
+  what contains what, and relative spatial positions (above/below/left/right of). Name regions the way a frontend developer would.
 - **State**: which controls are enabled, disabled, focused, selected, checked,
   expanded, loading, or showing an error. Say how you can tell (greyed out, blue fill,
   red border, spinner).
-- **Colour and iconography** only where it carries meaning (a red border, a warning
-  triangle, a green check).
-- **Anomalies**: overlapping or clipped text, misalignment, missing images, untranslated
-  strings, placeholder text left in, inconsistent spacing.
-Do not guess at behaviour that is not visible; if you describe what a control probably
-does, mark it as an inference.
+- **Colour and iconography** only where it carries semantic meaning (a red border for error, a green check for status, warning badge).
+- **Anomalies & Misalignments**: overlapping or clipped text, horizontal/vertical misalignment, improper padding/margin spacing,
+  missing images, untranslated strings, placeholder text left in.
+Do not claim actual DOM, CSS source, or framework implementation. Infer only plausible visual structure and mark inferences clearly.
+""",
+    ),
+    UI_STRUCTURE: PromptProfile(
+        key=UI_STRUCTURE,
+        title="UI Component Structure & Hierarchy",
+        instructions="""
+Deconstruct the interface into a structured Visual Component Hierarchy:
+1. **Container Tree**: Group components into nested containers (Header, Sidebar, Main Panel, Card, Form, Table, Modal).
+2. **Layout Types**: Identify container layout behavior (flex-row, flex-column, grid with N columns, stack).
+3. **Control Identification**: List all inputs, buttons, labels, and widgets within each container.
+4. **Disambiguation**:
+   - **Observed**: Visually confirmed elements and parent-child relationships.
+   - **Inferred**: Plausible container boundaries and layout models.
+Do not guess unseen code or actual DOM properties. Label all inferences explicitly.
+""",
+    ),
+    UI_ALIGNMENT: PromptProfile(
+        key=UI_ALIGNMENT,
+        title="UI Spatial Alignment & CSS Diagnosis",
+        instructions="""
+Perform a precision spatial alignment analysis across three explicit tiers:
+1. **Observed Anomalies**:
+   - Report exact spatial misalignments (e.g. "Button X top edge sits ~10px lower than Date Input Y").
+   - Report clipped text, truncated labels, or uneven padding/margin gaps.
+2. **Likely Causes (Inferred)**:
+   - Provide candidate CSS layout causes (e.g. mismatched wrapper heights, `align-items: center` vs `end`, line-height mismatch).
+3. **Recommended Checks**:
+   - Concrete inspection steps for frontend developers (e.g. "Check computed height on .form-group", "Inspect flex alignment on header container").
+Never claim the actual CSS rules or framework source; label all cause hypotheses as inferred.
+""",
+    ),
+    UI_GROUNDING: PromptProfile(
+        key=UI_GROUNDING,
+        title="UI Element Grounding & Bounding Boxes",
+        instructions="""
+Extract bounding boxes for all prominent UI controls and containers.
+Formatting Rules:
+- All bounding boxes MUST use [x_min, y_min, x_max, y_max] in a 0-1000 coordinate space relative to the complete image.
+- List each component with its ID, label, control type, and bbox:
+  `c1: [type: button, label: "Save", bbox: [850, 920, 960, 970]]`
+- Group children under parent container IDs.
 """,
     ),
     TERMINAL_OR_ERROR: PromptProfile(
@@ -231,12 +274,14 @@ def select_profile(
     *,
     from_pdf_page: bool = False,
     default: str = GENERAL,
+    explicit_profile: str | None = None,
 ) -> PromptProfile:
-    """Pick a profile from the caller's question and the image's origin.
+    """Pick a profile from explicit selection, caller's question, or origin.
 
-    A PDF page is a scanned document unless the question clearly asks for something
-    else, because that is what a rasterised page almost always is.
+    An explicit profile choice overrides heuristic selection.
     """
+    if explicit_profile and explicit_profile in PROFILES:
+        return PROFILES[explicit_profile]
     if question:
         for key, pattern in _SELECTION_RULES:
             if pattern.search(question):
